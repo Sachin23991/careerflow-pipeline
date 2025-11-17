@@ -1,56 +1,31 @@
-name: Update Career Dataset
+name: Update Dataset Daily + Append Every Run
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "*/40 * * * *"    # every 40 minutes → append only
+    - cron: "0 0 * * *"       # every day at 00:00 → full overwrite
   workflow_dispatch:
 
-permissions:
-  contents: write
-       # Manual trigger
-
 jobs:
-  pipeline:
+  update-dataset:
     runs-on: ubuntu-latest
 
     steps:
-    # -------------------------------
-    # 1. Checkout repository
-    # -------------------------------
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    # -------------------------------
-    # 2. Setup Python
-    # -------------------------------
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    # -------------------------------
-    # 3. Install Dependencies
-    # -------------------------------
-    - name: Install dependencies
-      run: |
-        pip install requests feedparser huggingface_hub transformers beautifulsoup4 lxml
+      - name: Install deps
+        run: |
+          pip install huggingface_hub pandas
 
-    # -------------------------------
-    # 4. Run Pipeline Scripts
-    # -------------------------------
-    - name: Run scraping + filtering + dataset builder + upload
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: |
-        python pipeline/scrape.py
-        python pipeline/filter.py
-        python pipeline/dataset_builder.py
-        python pipeline/push_to_hf.py
-
-    # -------------------------------
-    # 5. Auto Commit any updates
-    # -------------------------------
-    - name: Auto Commit Changes
-      uses: stefanzweifel/git-auto-commit-action@v4
-      with:
-        commit_message: "Auto update: New scraped career data"
+      - name: Run update script
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MODE: ${{ github.event.schedule == '0 0 * * *' && 'OVERWRITE' || 'APPEND' }}
+        run: |
+          python update_dataset.py $MODE
