@@ -2,28 +2,39 @@ name: Update Career Dataset
 
 on:
   schedule:
-    - cron: "0 * * * *"  # Run every hour
-  workflow_dispatch:     # Allow manual run
+    - cron: "0 * * * *"   # Run every hour
+  workflow_dispatch:       # Manual trigger
 
 jobs:
   pipeline:
     runs-on: ubuntu-latest
 
-
     steps:
+    # -------------------------------
+    # 1. Checkout repository
+    # -------------------------------
     - name: Checkout repo
       uses: actions/checkout@v3
 
+    # -------------------------------
+    # 2. Setup Python
+    # -------------------------------
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: "3.10"
 
+    # -------------------------------
+    # 3. Install Dependencies
+    # -------------------------------
     - name: Install dependencies
       run: |
-        pip install requests feedparser huggingface_hub transformers
+        pip install requests feedparser huggingface_hub transformers beautifulsoup4 lxml
 
-    - name: Run scripts
+    # -------------------------------
+    # 4. Run Pipeline Scripts
+    # -------------------------------
+    - name: Run scraping + filtering + dataset builder + upload
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
@@ -32,7 +43,10 @@ jobs:
         python pipeline/dataset_builder.py
         python pipeline/push_to_hf.py
 
+    # -------------------------------
+    # 5. Auto Commit any updates
+    # -------------------------------
     - name: Auto Commit Changes
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
-        commit_message: "Auto update dataset"
+        commit_message: "Auto update: New scraped career data"
