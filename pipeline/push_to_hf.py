@@ -11,6 +11,7 @@ def push_to_hf():
         path_or_fileobj=TRAIN_FILE,
         path_in_repo="train.jsonl",
         repo_id=DATASET_REPO,
+        repo_type="dataset",
         token=os.getenv("HF_TOKEN")
     )
 
