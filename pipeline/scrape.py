@@ -1,10 +1,18 @@
 import feedparser
+import requests
+from bs4 import BeautifulSoup
+import time
 import json
+import hashlib
 
-RSS = [
-    # -----------------------------
-    # EDUCATION & EXAMS (Core)
-    # -----------------------------
+OUTPUT_FILE = "pipeline/raw_news.jsonl"
+
+# -------------------------------------------------------
+#  ALL CAREER NEWS SOURCES
+# -------------------------------------------------------
+urls = [
+
+    # -------------------- Education / Exams --------------------
     "https://timesofindia.indiatimes.com/education/rssfeedss.cms",
     "https://www.hindustantimes.com/education/rssfeed",
     "https://indianexpress.com/section/education/feed/",
@@ -14,66 +22,113 @@ RSS = [
     "https://www.jagranjosh.com/rss/jobs.xml",
     "https://www.freejobalert.com/feed/",
 
-    # -----------------------------
-    # GOVERNMENT JOBS & OPPORTUNITIES
-    # -----------------------------
+    # -------------------- Government Job Updates --------------------
     "https://www.sarkariresult.com/feed/",
-    "https://www.employmentnews.gov.in/RSS.aspx",   # Official Govt News
+    "https://www.employmentnews.gov.in/RSS.aspx",
     "https://www.upsc.gov.in/whats-new/all/rss",
-    "https://www.staff-selection-commission.in/rss", 
     "https://pscnotes.in/feed/",
 
-    # -----------------------------
-    # IT / TECH CAREER NEWS
-    # -----------------------------
+    # -------------------- Tech / IT / Industry Trends --------------------
     "https://techcrunch.com/feed/",
     "https://www.theverge.com/rss/index.xml",
     "https://www.wired.com/feed/rss",
     "https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms",
     "https://gadgets360.com/rss/news",
 
-    # -----------------------------
-    # BUSINESS / ECONOMY (Affects career growth)
-    # -----------------------------
+    # -------------------- Business / Economy --------------------
     "https://economictimes.indiatimes.com/news/economy/rssfeeds/1715249553.cms",
     "https://www.moneycontrol.com/rss/latestnews.xml",
     "https://www.livemint.com/rss/news",
 
-    # -----------------------------
-    # SKILLS, CERTIFICATIONS, COURSES
-    # (Skill-based career improvements)
-    # -----------------------------
+    # -------------------- Skills / Courses / Certifications --------------------
     "https://www.coursera.org/learn/feed",
     "https://www.udemy.com/courses/feed/",
-    "https://www.edx.org/rss", 
+    "https://www.edx.org/rss",
     "https://www.futurelearn.com/info/blog/feed",
 
-    # -----------------------------
-    # STARTUP / ENTREPRENEURSHIP JOBS
-    # -----------------------------
+    # -------------------- Startups & Entrepreneurship --------------------
     "https://yourstory.com/feed",
     "https://inc42.com/feed/",
     "https://www.startupindia.gov.in/content/sih/en/rss.html",
 
-    # -----------------------------
-    # INTERNATIONAL CAREERS
-    # -----------------------------
+    # -------------------- International Careers --------------------
     "https://www.studyabroad.com/rss",
     "https://www.scholarshipsads.com/feed/",
-    "https://www.opportunitiesforafricans.com/feed/",
     "https://www.opportunitydesk.org/feed/",
 ]
 
 
-items = []
-for url in RSS:
-    feed = feedparser.parse(url)
-    for e in feed.entries:
-        items.append({
-            "title": e.title,
-            "summary": e.get("summary", ""),
-            "link": e.link
-        })
+# -------------------------------------------------------
+# Helper: extract text from article link (when possible)
+# -------------------------------------------------------
+def fetch_full_text(url):
+    """Attempts to extract full article text; falls back to summary."""
+    try:
+        html = requests.get(url, timeout=6).text
+        soup = BeautifulSoup(html, "html.parser")
 
-with open("pipeline/raw_news.json", "w") as f:
-    json.dump(items, f, indent=2)
+        # Remove junk
+        for tag in soup(["script", "style", "header", "footer"]):
+            tag.extract()
+
+        text = " ".join(t.get_text(" ", strip=True) for t in soup.find_all("p"))
+        return text[:2000]  # limit size
+    except:
+        return None
+
+
+# -------------------------------------------------------
+# SCRAPE ALL RSS FEEDS
+# -------------------------------------------------------
+def scrape_all():
+    print("🔍 Scraping latest career news...")
+
+    seen = set()
+    all_items = []
+
+    for url in urls:
+        print(f"⏳ Fetching from {url}")
+
+        try:
+            feed = feedparser.parse(url)
+        except Exception as e:
+            print(f"❌ Failed: {url} ({e})")
+            continue
+
+        for entry in feed.entries:
+            title = entry.get("title", "").strip()
+            link = entry.get("link", "")
+            summary = entry.get("summary", "").strip()
+
+            if not title or not link:
+                continue
+
+            # Unique ID to avoid duplicates
+            uid = hashlib.md5(link.encode()).hexdigest()
+            if uid in seen:
+                continue
+            seen.add(uid)
+
+            # Fetch full text if possible
+            full_text = fetch_full_text(link) or summary
+
+            item = {
+                "id": uid,
+                "title": title,
+                "summary": summary,
+                "content": full_text,
+                "url": link,
+                "timestamp": time.time(),
+            }
+            all_items.append(item)
+
+    # Save
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        for it in all_items:
+            f.write(json.dumps(it, ensure_ascii=False) + "\n")
+
+    print(f"✅ Scraping complete. Saved {len(all_items)} raw articles.")
+
+
+if __name__ == "__main__":
+    scrape_all()
