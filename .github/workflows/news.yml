@@ -2,7 +2,7 @@ name: Update Dataset Daily + Append Every Run
 
 on:
   schedule:
-    - cron: "0 * * * *"      # every hour -> append
+    - cron: "0 * * * *"      # hourly -> append
     - cron: "0 0 * * *"      # midnight -> overwrite
   workflow_dispatch:
 
@@ -32,7 +32,6 @@ jobs:
         id: setmode
         shell: bash
         run: |
-          # If this job was triggered by the midnight cron, set OVERWRITE
           if [ "${{ github.event.schedule }}" = "0 0 * * *" ]; then
             echo "MODE=OVERWRITE" >> "$GITHUB_OUTPUT"
           else
@@ -40,11 +39,11 @@ jobs:
           fi
 
       - name: Show chosen mode
-        run: echo "Chosen mode: ${{ steps.setmode.outputs.MODE }}"
+        run: |
+          echo "Chosen mode: ${{ steps.setmode.outputs.MODE }}"
 
       - name: Run dataset update script
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "Running in mode: ${{ steps.setmode.outputs.MODE }}"
-          python pipeline/update_dataset.py ${{ steps.setmode.outputs.MODE }}
+          python pipeline/update_dataset.py "${{ steps.setmode.outputs.MODE }}"
