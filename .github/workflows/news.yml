@@ -21,23 +21,27 @@ jobs:
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install huggingface_hub pandas
 
-      # Debug: Print schedule value
       - name: Debug schedule
-        run: echo "Triggered schedule: '${{ github.event.schedule }}'"
+        run: |
+          echo "Triggered schedule: '${{ github.event.schedule }}'"
 
-      # Decide Mode: APPEND or OVERWRITE
       - name: Decide mode
         id: setmode
+        shell: bash
         run: |
+          # If this job was triggered by the midnight cron, set OVERWRITE
           if [ "${{ github.event.schedule }}" = "0 0 * * *" ]; then
-            echo "MODE=OVERWRITE" >> $GITHUB_OUTPUT
+            echo "MODE=OVERWRITE" >> "$GITHUB_OUTPUT"
           else
-            echo "MODE=APPEND" >> $GITHUB_OUTPUT
+            echo "MODE=APPEND" >> "$GITHUB_OUTPUT"
           fi
 
-      # Run Python script with correct mode
+      - name: Show chosen mode
+        run: echo "Chosen mode: ${{ steps.setmode.outputs.MODE }}"
+
       - name: Run dataset update script
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
