@@ -17,13 +17,17 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
           pip install huggingface_hub pandas
 
-      # Detect overwrite or append based on cron
+      # Debug: Print schedule value
+      - name: Debug schedule
+        run: echo "Triggered schedule: '${{ github.event.schedule }}'"
+
+      # Decide Mode: APPEND or OVERWRITE
       - name: Decide mode
         id: setmode
         run: |
@@ -33,9 +37,10 @@ jobs:
             echo "MODE=APPEND" >> $GITHUB_OUTPUT
           fi
 
+      # Run Python script with correct mode
       - name: Run dataset update script
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          echo "Running mode: ${{ steps.setmode.outputs.MODE }}"
+          echo "Running in mode: ${{ steps.setmode.outputs.MODE }}"
           python pipeline/update_dataset.py ${{ steps.setmode.outputs.MODE }}
