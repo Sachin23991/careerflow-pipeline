@@ -2,8 +2,8 @@ name: Update Dataset Daily + Append Every Run
 
 on:
   schedule:
-    - cron: "0 * * * *"      # every hour append
-    - cron: "0 0 * * *"      # overwrite at midnight
+    - cron: "0 * * * *"      # every hour — append
+    - cron: "0 0 * * *"      # midnight — still append (NO overwrite)
   workflow_dispatch:
 
 jobs:
@@ -23,12 +23,10 @@ jobs:
         run: |
           pip install huggingface_hub pandas
 
-      - name: Run dataset update script
+      - name: Run dataset update script (Append Only)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-
-          MODE: ${{ startsWith(github.event.schedule, '0 0') && 'OVERWRITE' || 'APPEND' }}
-
+          MODE: "APPEND"     # <-- ALWAYS append
         run: |
           echo "Running mode: $MODE"
           python pipeline/update_dataset.py $MODE
