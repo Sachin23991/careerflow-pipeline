@@ -2,7 +2,7 @@ name: Update Dataset Daily + Append Every Run
 
 on:
   schedule:
-    - cron: "*/40 * * * *"    # every 40 min = append
+    - cron: "0 * * * *"    # every 40 min = append
     - cron: "0 0 * * *"       # every day at midnight = overwrite
   workflow_dispatch:
 
