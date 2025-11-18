@@ -2,8 +2,8 @@ name: Update Dataset Daily + Append Every Run
 
 on:
   schedule:
-    - cron: "0 * * * *"    # every 40 min = append
-    - cron: "0 0 * * *"       # every day at midnight = overwrite
+    - cron: "0 * * * *"      # every hour append
+    - cron: "0 0 * * *"      # overwrite at midnight
   workflow_dispatch:
 
 jobs:
@@ -26,8 +26,9 @@ jobs:
       - name: Run dataset update script
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # Detect which CRON triggered the workflow
-          MODE: ${{ github.event.schedule == '0 0 * * *' && 'OVERWRITE' || 'APPEND' }}
+
+          MODE: ${{ startsWith(github.event.schedule, '0 0') && 'OVERWRITE' || 'APPEND' }}
+
         run: |
           echo "Running mode: $MODE"
           python pipeline/update_dataset.py $MODE
