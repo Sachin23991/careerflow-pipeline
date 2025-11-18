@@ -7,8 +7,6 @@ import hashlib
 
 OUTPUT_FILE = "pipeline/raw_news.jsonl"
 
-REQUEST_TIMEOUT = 8   # safe for GitHub Actions
-
 # -------------------------------------------------------
 #  ALL CAREER NEWS SOURCES
 # -------------------------------------------------------
@@ -43,12 +41,10 @@ urls = [
     "https://www.livemint.com/rss/news",
 
     # -------------------- Skills / Courses / Certifications --------------------
+    "https://www.coursera.org/learn/feed",
+    "https://www.udemy.com/courses/feed/",
     "https://www.edx.org/rss",
     "https://www.futurelearn.com/info/blog/feed",
-
-    # Udemy & Coursera do NOT have valid RSS feeds (removed — they hang)
-    # "https://www.coursera.org/learn/feed",
-    # "https://www.udemy.com/courses/feed/",
 
     # -------------------- Startups & Entrepreneurship --------------------
     "https://yourstory.com/feed",
@@ -63,33 +59,21 @@ urls = [
 
 
 # -------------------------------------------------------
-# Helper: Safe full-text extraction with timeout
+# Helper: extract text from article link (when possible)
 # -------------------------------------------------------
 def fetch_full_text(url):
+    """Attempts to extract full article text; falls back to summary."""
     try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        soup = BeautifulSoup(resp.text, "html.parser")
+        html = requests.get(url, timeout=6).text
+        soup = BeautifulSoup(html, "html.parser")
 
         # Remove junk
         for tag in soup(["script", "style", "header", "footer"]):
             tag.extract()
 
         text = " ".join(t.get_text(" ", strip=True) for t in soup.find_all("p"))
-        return text[:2000] if text else None
-    except Exception:
-        return None
-
-
-# -------------------------------------------------------
-# Safe RSS fetcher + parser
-# -------------------------------------------------------
-def fetch_feed_safe(url):
-    try:
-        print(f"⏳ Fetching feed: {url}")
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        return feedparser.parse(resp.content)
-    except Exception as e:
-        print(f"❌ Feed timeout/failure: {url} ({e})")
+        return text[:2000]  # limit size
+    except:
         return None
 
 
@@ -103,23 +87,29 @@ def scrape_all():
     all_items = []
 
     for url in urls:
-        feed = fetch_feed_safe(url)
-        if not feed or not feed.entries:
+        print(f"⏳ Fetching from {url}")
+
+        try:
+            feed = feedparser.parse(url)
+        except Exception as e:
+            print(f"❌ Failed: {url} ({e})")
             continue
 
         for entry in feed.entries:
             title = entry.get("title", "").strip()
-            link = entry.get("link", "").strip()
+            link = entry.get("link", "")
             summary = entry.get("summary", "").strip()
 
             if not title or not link:
                 continue
 
+            # Unique ID to avoid duplicates
             uid = hashlib.md5(link.encode()).hexdigest()
             if uid in seen:
                 continue
             seen.add(uid)
 
+            # Fetch full text if possible
             full_text = fetch_full_text(link) or summary
 
             item = {
@@ -130,10 +120,9 @@ def scrape_all():
                 "url": link,
                 "timestamp": time.time(),
             }
-
             all_items.append(item)
 
-    # Save output (overwrite)
+    # Save
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         for it in all_items:
             f.write(json.dumps(it, ensure_ascii=False) + "\n")
