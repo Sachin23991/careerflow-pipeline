@@ -2,30 +2,32 @@ name: Update Dataset Daily + Append Every Run
 
 on:
   schedule:
-    - cron: "*/40 * * * *"    # every 40 minutes → append only
-    - cron: "0 0 * * *"       # every day at 00:00 → full overwrite
+    - cron: "*/40 * * * *"    # every 40 min = append
+    - cron: "0 0 * * *"       # every day at midnight = overwrite
   workflow_dispatch:
 
 jobs:
-  update-dataset:
+  run-pipeline:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           pip install huggingface_hub pandas
 
-      - name: Run update script
+      - name: Run dataset update script
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Detect which CRON triggered the workflow
           MODE: ${{ github.event.schedule == '0 0 * * *' && 'OVERWRITE' || 'APPEND' }}
         run: |
-          python update_dataset.py $MODE
+          echo "Running mode: $MODE"
+          python pipeline/update_dataset.py $MODE
