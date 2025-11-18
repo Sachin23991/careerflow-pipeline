@@ -2,12 +2,13 @@ name: Dataset OVERWRITE (Midnight Reset)
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 0 * * *"   # Run at midnight
   workflow_dispatch:
 
 jobs:
   reset:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -15,10 +16,23 @@ jobs:
         with:
           python-version: "3.10"
 
-      - run: pip install huggingface_hub pandas
+      - name: Install dependencies
+        run: pip install feedparser beautifulsoup4 requests pandas huggingface_hub
 
-      - name: Run OVERWRITE
+      # 1. SCRAPE EVERYTHING FRESH
+      - name: Scrape all news
+        run: python pipeline/scrape.py
+
+      # 2. FILTER CAREER NEWS
+      - name: Filter news
+        run: python pipeline/filter.py
+
+      # 3. REBUILD TRAINING DATASET (COMPLETE OVERWRITE)
+      - name: Build dataset
+        run: python pipeline/dataset_builder.py
+
+      # 4. UPLOAD TO HUGGINGFACE (OVERWRITE)
+      - name: Upload new dataset to HuggingFace
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          python pipeline/update_dataset.py OVERWRITE
+        run: python pipeline/push_to_hf.py
