@@ -2,12 +2,11 @@ name: Update Career Dataset
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 * * * *"   # every hour
   workflow_dispatch:
 
 permissions:
   contents: write
-       # Manual trigger
 
 jobs:
   pipeline:
@@ -36,15 +35,38 @@ jobs:
         pip install requests feedparser huggingface_hub transformers beautifulsoup4 lxml
 
     # -------------------------------
-    # 4. Run Pipeline Scripts
+    # 4. Run Pipeline (scrape → filter → build)
     # -------------------------------
-    - name: Run scraping + filtering + dataset builder + upload
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    - name: Run scraping + filtering + dataset builder
       run: |
         python pipeline/scrape.py
         python pipeline/filter.py
         python pipeline/dataset_builder.py
+
+    # --------------------------------------------------------
+    # 4.5 NEW STEP → APPEND hourly OR OVERWRITE at midnight
+    # --------------------------------------------------------
+    - name: Merge or Overwrite train.jsonl
+      run: |
+        echo "⏱ Checking whether to append or overwrite..."
+
+        # Midnight check
+        if [ "$(date +%H)" = "00" ]; then
+          echo "🌙 Midnight detected → Overwriting train.jsonl"
+          cp pipeline/train.jsonl train.jsonl
+        else
+          echo "⏳ Hourly run → Appending new items"
+          touch train.jsonl
+          cat pipeline/train.jsonl >> train.jsonl
+        fi
+
+    # -------------------------------
+    # 4.6 Upload final train.jsonl to HF
+    # -------------------------------
+    - name: Upload updated dataset to HuggingFace
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
         python pipeline/push_to_hf.py
 
     # -------------------------------
