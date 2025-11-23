@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
     # -------------------------------
     # 1. Checkout repository
     # -------------------------------
@@ -35,7 +36,7 @@ jobs:
         pip install requests feedparser huggingface_hub transformers beautifulsoup4 lxml
 
     # -------------------------------
-    # 4. Run Pipeline (scrape → filter → build)
+    # 4. Run scraping + filtering + dataset builder
     # -------------------------------
     - name: Run scraping + filtering + dataset builder
       run: |
@@ -44,24 +45,23 @@ jobs:
         python pipeline/dataset_builder.py
 
     # --------------------------------------------------------
-    # 4.5 NEW STEP → APPEND hourly OR OVERWRITE at midnight
+    # 5. Merge or Overwrite FINAL train.jsonl
     # --------------------------------------------------------
     - name: Merge or Overwrite train.jsonl
       run: |
-        echo "⏱ Checking whether to append or overwrite..."
+        echo "📝 Checking whether to append or overwrite..."
 
-        # Midnight check
+        # MIDNIGHT BEHAVIOR → OVERWRITE
         if [ "$(date +%H)" = "00" ]; then
-          echo "🌙 Midnight detected → Overwriting train.jsonl"
+          echo "🌙 Midnight → Overwriting main train.jsonl"
           cp pipeline/train.jsonl train.jsonl
         else
-          echo "⏳ Hourly run → Appending new items"
-          touch train.jsonl
-          cat pipeline/train.jsonl >> train.jsonl
+          echo "⏳ Hourly → Append ONLY new unique items"
+          python pipeline/dataset_merge.py
         fi
 
     # -------------------------------
-    # 4.6 Upload final train.jsonl to HF
+    # 6. Upload final dataset to HuggingFace
     # -------------------------------
     - name: Upload updated dataset to HuggingFace
       env:
@@ -69,8 +69,17 @@ jobs:
       run: |
         python pipeline/push_to_hf.py
 
+    # --------------------------------------------------------
+    # 7. CLEAR DATA LOCALLY (prevent GitHub 100 MB limit)
+    # --------------------------------------------------------
+    - name: Clear train.jsonl after upload
+      run: |
+        echo "" > train.jsonl
+        echo "" > pipeline/train.jsonl
+        echo "🧹 Cleared local files to prevent size growth."
+
     # -------------------------------
-    # 5. Auto Commit any updates
+    # 8. Auto Commit Changes
     # -------------------------------
     - name: Auto Commit Changes
       uses: stefanzweifel/git-auto-commit-action@v4
