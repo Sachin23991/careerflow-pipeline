@@ -2,7 +2,7 @@ name: Update Career Dataset
 
 on:
   schedule:
-    - cron: "0 * * * *"   # every hour (GitHub uses UTC)
+    - cron: "0 * * * *"   # Run every hour
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,8 @@ jobs:
     # -------------------------------
     # 1. Checkout repository
     # -------------------------------
+    # We fetch depth 0 to ensure we have the history if needed, 
+    # though primarily we just need the existing 'train.jsonl'
     - name: Checkout repo
       uses: actions/checkout@v3
       with:
@@ -40,6 +42,7 @@ jobs:
     # -------------------------------
     # 4. Run scraping + filtering + dataset builder
     # -------------------------------
+    # This generates a FRESH "pipeline/train.jsonl" (contains ONLY data scraped right now)
     - name: Run scraping + filtering + dataset builder
       run: |
         set -e
@@ -53,40 +56,33 @@ jobs:
     - name: Merge or Overwrite train.jsonl
       run: |
         set -e
-        echo "📝 Checking whether to append or overwrite..."
-
+        
         # Get hour in IST (Asia/Kolkata)
         HOUR_IN_IST=$(TZ='Asia/Kolkata' date +%H)
         echo "🕒 Current hour in IST: $HOUR_IN_IST"
 
-        # MIDNIGHT (IST) → OVERWRITE
+        # LOGIC:
+        # If Midnight (00): We REPLACE the main file with the fresh scrape. (Resets file size)
+        # If Other Hour: We RUN MERGE script to add fresh scrape to existing main file.
+        
         if [ "$HOUR_IN_IST" = "00" ]; then
-          echo "🌙 Midnight (IST) → Overwriting main train.jsonl"
+          echo "🌙 Midnight (IST) detected."
+          echo "🔄 ACTION: Overwriting train.jsonl (Daily Reset)"
+          # Overwrite main file with the fresh batch only.
+          # This keeps the file from exceeding GitHub's 100MB limit over time.
           cp pipeline/train.jsonl train.jsonl
         else
-          echo "⏳ Hourly (IST) → Append ONLY new unique items"
+          echo "⏳ Hourly update detected."
+          echo "➕ ACTION: Appending new unique items to existing train.jsonl"
+          # Appends 'pipeline/train.jsonl' content to 'train.jsonl' (handling duplicates)
           python pipeline/dataset_merge.py
         fi
 
     # -------------------------------
-    # 5.5 Debug: show dataset info before upload (optional but useful)
-    # -------------------------------
-    - name: Debug: Show dataset info before upload
-      run: |
-        echo "📦 Files in root:"
-        ls -lh
-        echo "📦 Files in pipeline/:"
-        ls -lh pipeline || true
-
-        echo "🔎 Head of train.jsonl:"
-        head -n 10 train.jsonl || echo "train.jsonl missing or empty"
-
-        echo "🔎 Head of pipeline/train.jsonl:"
-        head -n 10 pipeline/train.jsonl || echo "pipeline/train.jsonl missing or empty"
-
-    # -------------------------------
     # 6. Upload final dataset to HuggingFace
     # -------------------------------
+    # This runs AFTER the file has been either appended or overwritten.
+    # It will upload the current state of 'train.jsonl' to Hugging Face.
     - name: Upload updated dataset to HuggingFace
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -94,25 +90,16 @@ jobs:
         set -e
         python pipeline/push_to_hf.py
 
-    # --------------------------------------------------------
-    # 7. CLEAR DATA LOCALLY (prevent GitHub 100 MB limit)
-    #    Only if everything above succeeded
-    # --------------------------------------------------------
-    - name: Clear train.jsonl after upload
-      if: ${{ success() }}
-      run: |
-        echo "" > train.jsonl
-        echo "" > pipeline/train.jsonl
-        echo "🧹 Cleared local files to prevent size growth."
-
     # -------------------------------
-    # 8. Auto Commit Changes
+    # 7. Auto Commit Changes
     # -------------------------------
+    # Commits the changes to GitHub so the next hourly run sees the accumulated data.
+    # At midnight, this commit effectively "shrinks" the file in the repo history.
     - name: Auto Commit Changes
       if: ${{ success() }}
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
-        commit_message: "Auto update: New scraped career data"
+        commit_message: "Auto update: Career data sync [IST Hour: $(TZ='Asia/Kolkata' date +%H)]"
         file_pattern: |
           train.jsonl
           pipeline/train.jsonl
