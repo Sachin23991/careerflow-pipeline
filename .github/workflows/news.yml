@@ -2,7 +2,7 @@ name: Update Career Dataset
 
 on:
   schedule:
-    - cron: "0 * * * *"   # every hour
+    - cron: "0 * * * *"   # every hour (GitHub uses UTC)
   workflow_dispatch:
 
 permissions:
@@ -13,12 +13,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
     # -------------------------------
     # 1. Checkout repository
     # -------------------------------
     - name: Checkout repo
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
 
     # -------------------------------
     # 2. Setup Python
@@ -33,6 +34,7 @@ jobs:
     # -------------------------------
     - name: Install dependencies
       run: |
+        pip install --upgrade pip
         pip install requests feedparser huggingface_hub transformers beautifulsoup4 lxml
 
     # -------------------------------
@@ -40,6 +42,7 @@ jobs:
     # -------------------------------
     - name: Run scraping + filtering + dataset builder
       run: |
+        set -e
         python pipeline/scrape.py
         python pipeline/filter.py
         python pipeline/dataset_builder.py
@@ -49,16 +52,37 @@ jobs:
     # --------------------------------------------------------
     - name: Merge or Overwrite train.jsonl
       run: |
+        set -e
         echo "📝 Checking whether to append or overwrite..."
 
-        # MIDNIGHT BEHAVIOR → OVERWRITE
-        if [ "$(date +%H)" = "00" ]; then
-          echo "🌙 Midnight → Overwriting main train.jsonl"
+        # Get hour in IST (Asia/Kolkata)
+        HOUR_IN_IST=$(TZ='Asia/Kolkata' date +%H)
+        echo "🕒 Current hour in IST: $HOUR_IN_IST"
+
+        # MIDNIGHT (IST) → OVERWRITE
+        if [ "$HOUR_IN_IST" = "00" ]; then
+          echo "🌙 Midnight (IST) → Overwriting main train.jsonl"
           cp pipeline/train.jsonl train.jsonl
         else
-          echo "⏳ Hourly → Append ONLY new unique items"
+          echo "⏳ Hourly (IST) → Append ONLY new unique items"
           python pipeline/dataset_merge.py
         fi
+
+    # -------------------------------
+    # 5.5 Debug: show dataset info before upload (optional but useful)
+    # -------------------------------
+    - name: Debug: Show dataset info before upload
+      run: |
+        echo "📦 Files in root:"
+        ls -lh
+        echo "📦 Files in pipeline/:"
+        ls -lh pipeline || true
+
+        echo "🔎 Head of train.jsonl:"
+        head -n 10 train.jsonl || echo "train.jsonl missing or empty"
+
+        echo "🔎 Head of pipeline/train.jsonl:"
+        head -n 10 pipeline/train.jsonl || echo "pipeline/train.jsonl missing or empty"
 
     # -------------------------------
     # 6. Upload final dataset to HuggingFace
@@ -67,12 +91,15 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
+        set -e
         python pipeline/push_to_hf.py
 
     # --------------------------------------------------------
     # 7. CLEAR DATA LOCALLY (prevent GitHub 100 MB limit)
+    #    Only if everything above succeeded
     # --------------------------------------------------------
     - name: Clear train.jsonl after upload
+      if: ${{ success() }}
       run: |
         echo "" > train.jsonl
         echo "" > pipeline/train.jsonl
@@ -82,6 +109,10 @@ jobs:
     # 8. Auto Commit Changes
     # -------------------------------
     - name: Auto Commit Changes
+      if: ${{ success() }}
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
         commit_message: "Auto update: New scraped career data"
+        file_pattern: |
+          train.jsonl
+          pipeline/train.jsonl
