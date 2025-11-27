@@ -2,7 +2,7 @@ name: Update Career Dataset
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Run every hour
+    - cron: "0 * * * *"   # Every hour
   workflow_dispatch:
 
 permissions:
@@ -16,8 +16,6 @@ jobs:
     # -------------------------------
     # 1. Checkout repository
     # -------------------------------
-    # We fetch depth 0 to ensure we have the history if needed, 
-    # though primarily we just need the existing 'train.jsonl'
     - name: Checkout repo
       uses: actions/checkout@v3
       with:
@@ -40,9 +38,8 @@ jobs:
         pip install requests feedparser huggingface_hub transformers beautifulsoup4 lxml
 
     # -------------------------------
-    # 4. Run scraping + filtering + dataset builder
+    # 4. Scrape + Filter + Build 
     # -------------------------------
-    # This generates a FRESH "pipeline/train.jsonl" (contains ONLY data scraped right now)
     - name: Run scraping + filtering + dataset builder
       run: |
         set -e
@@ -51,38 +48,25 @@ jobs:
         python pipeline/dataset_builder.py
 
     # --------------------------------------------------------
-    # 5. Merge or Overwrite FINAL train.jsonl
+    # 5. Merge or Overwrite train.jsonl
     # --------------------------------------------------------
-    - name: Merge or Overwrite train.jsonl
+    - name: Merge or overwrite train.jsonl
       run: |
         set -e
-        
-        # Get hour in IST (Asia/Kolkata)
         HOUR_IN_IST=$(TZ='Asia/Kolkata' date +%H)
-        echo "🕒 Current hour in IST: $HOUR_IN_IST"
+        echo "🕒 Current IST Hour: $HOUR_IN_IST"
 
-        # LOGIC:
-        # If Midnight (00): We REPLACE the main file with the fresh scrape. (Resets file size)
-        # If Other Hour: We RUN MERGE script to add fresh scrape to existing main file.
-        
         if [ "$HOUR_IN_IST" = "00" ]; then
-          echo "🌙 Midnight (IST) detected."
-          echo "🔄 ACTION: Overwriting train.jsonl (Daily Reset)"
-          # Overwrite main file with the fresh batch only.
-          # This keeps the file from exceeding GitHub's 100MB limit over time.
+          echo "🌙 Midnight IST → Overwriting train.jsonl"
           cp pipeline/train.jsonl train.jsonl
         else
-          echo "⏳ Hourly update detected."
-          echo "➕ ACTION: Appending new unique items to existing train.jsonl"
-          # Appends 'pipeline/train.jsonl' content to 'train.jsonl' (handling duplicates)
+          echo "⏳ Hourly run → Merging new items"
           python pipeline/dataset_merge.py
         fi
 
     # -------------------------------
-    # 6. Upload final dataset to HuggingFace
+    # 6. Upload to HuggingFace
     # -------------------------------
-    # This runs AFTER the file has been either appended or overwritten.
-    # It will upload the current state of 'train.jsonl' to Hugging Face.
     - name: Upload updated dataset to HuggingFace
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -90,16 +74,25 @@ jobs:
         set -e
         python pipeline/push_to_hf.py
 
-    # -------------------------------
-    # 7. Auto Commit Changes
-    # -------------------------------
-    # Commits the changes to GitHub so the next hourly run sees the accumulated data.
-    # At midnight, this commit effectively "shrinks" the file in the repo history.
-    - name: Auto Commit Changes
-      if: ${{ success() }}
-      uses: stefanzweifel/git-auto-commit-action@v4
-      with:
-        commit_message: "Auto update: Career data sync [IST Hour: $(TZ='Asia/Kolkata' date +%H)]"
-        file_pattern: |
-          train.jsonl
-          pipeline/train.jsonl
+    # --------------------------------------------------------
+    # 7. Debug - Show what changed
+    # --------------------------------------------------------
+    - name: Show Git changes
+      run: |
+        echo "---------------- Git Status ----------------"
+        git status --short || true
+
+        echo "---------------- Git Diff ----------------"
+        git diff --stat || true
+
+    # --------------------------------------------------------
+    # 8. Force Add → Commit → Push (RELIABLE)
+    # --------------------------------------------------------
+    - name: Commit and Push Changes
+      run: |
+        git config --local user.name "github-actions[bot]"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+
+        git add -A
+        git commit -m "Auto update: Career data sync [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || echo "No changes to commit"
+        git push || echo "Nothing to push"
