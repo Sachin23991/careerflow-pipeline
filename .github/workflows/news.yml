@@ -90,8 +90,9 @@ jobs:
     # --------------------------------------------------------
     - name: Commit and Push Changes
       run: |
-        git config --local user.name "github-actions[bot]"
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "Sachin23991"
+        git config --local user.email "Sachinraosahab7@gmail.com"
+
 
         git add -A
         git commit -m "Auto update: Career data sync [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || echo "No changes to commit"
