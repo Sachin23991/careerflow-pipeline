@@ -93,7 +93,7 @@ jobs:
         git config --local user.name "Sachin23991"
         git config --local user.email "Sachinraosahab7@gmail.com"
 
-
         git add -A
-        git commit -m "Auto update: Career data sync [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || echo "No changes to commit"
+        git commit --author="Sachin23991 <Sachinraosahab7@gmail.com>" -m "Auto update: Career data sync [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || echo "No changes to commit"
         git push || echo "Nothing to push"
+
