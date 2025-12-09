@@ -1,79 +1,99 @@
 # pipeline/dataset_builder.py
-import json
+import json, os
 from pathlib import Path
-import math
-import os
+from math import ceil
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
 FILTERED = Path("pipeline/filtered_news.jsonl")
 OUT = Path("pipeline/rag_docs.jsonl")
-
-# chunk settings (characters)
+EMB_FILE = Path("pipeline/embeddings.npy")
+EMB_IDS = Path("pipeline/emb_ids.jsonl")
 CHUNK_SIZE = 2500
 OVERLAP = 300
 
-# Embeddings: set to True if you installed sentence-transformers in requirements
-EMBEDDINGS = True if os.getenv("COMPUTE_EMBEDDINGS", "1") == "1" else False
+EMBED = os.getenv("COMPUTE_EMBEDDINGS", "1") == "1"
 
 def chunk_text(text, size=CHUNK_SIZE, overlap=OVERLAP):
     chunks = []
     start = 0
-    L = len(text)
-    while start < L:
-        end = min(L, start + size)
+    n = len(text)
+    while start < n:
+        end = min(n, start + size)
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
-        if end == L:
+        if end == n:
             break
-        start = end - overlap
+        start = max(0, end - overlap)
     return chunks
 
-def build():
-    if not FILTERED.exists():
-        print("No filtered file:", FILTERED)
-        return
+def load_existing_ids():
+    if not EMB_IDS.exists():
+        return set()
+    s = set()
+    for line in EMB_IDS.open(encoding="utf-8"):
+        obj = json.loads(line)
+        s.add(obj["doc_id"])
+    return s
 
+def append_embeds(existing_embeddings, new_embeddings):
+    if existing_embeddings is None:
+        return new_embeddings
+    return np.vstack([existing_embeddings, new_embeddings])
+
+def main():
     docs = []
-    for line in open(FILTERED, encoding="utf-8"):
+    if not FILTERED.exists():
+        print("no filtered file")
+        return
+    for line in FILTERED.open(encoding="utf-8"):
         it = json.loads(line)
-        text = it.get("text", "")
-        chunks = chunk_text(text)
+        chunks = chunk_text(it.get("text",""))
         for i, ch in enumerate(chunks):
-            doc = {
+            docs.append({
                 "doc_id": f"{it['id']}_c{i}",
                 "source_id": it["id"],
                 "url": it.get("url"),
                 "title": it.get("title"),
                 "published": it.get("published"),
-                "feed": it.get("feed"),
-                "chunk_index": i,
                 "text": ch
-            }
-            docs.append(doc)
-
-    print(f"Built {len(docs)} document chunks.")
-    # write rag jsonl
+            })
+    print("Total chunks:", len(docs))
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", encoding="utf-8") as f:
         for d in docs:
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
 
-    # optionally compute embeddings
-    if EMBEDDINGS:
-        try:
-            from sentence_transformers import SentenceTransformer
-            import numpy as np
-            model = SentenceTransformer("all-MiniLM-L6-v2")
-            texts = [d["text"] for d in docs]
-            print("Computing embeddings for", len(texts), "chunks...")
-            embeddings = model.encode(texts, show_progress_bar=True, convert_to_numpy=True)
-            np.save("pipeline/embeddings.npy", embeddings)
-            # save mapping of doc ids
-            with open("pipeline/emb_ids.jsonl", "w", encoding="utf-8") as idf:
-                for d in docs:
-                    idf.write(json.dumps({"doc_id": d["doc_id"], "source_id": d["source_id"]}) + "\n")
-            print("Saved embeddings -> pipeline/embeddings.npy and pipeline/emb_ids.jsonl")
-        except Exception as e:
-            print("Embedding computation failed:", e)
+    # incremental embeddings
+    if EMBED:
+        print("Computing incremental embeddings...")
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        existing_ids = load_existing_ids()
+        new_texts = []
+        new_doc_ids = []
+        for d in docs:
+            if d["doc_id"] not in existing_ids:
+                new_texts.append(d["text"])
+                new_doc_ids.append(d["doc_id"])
+        print("New chunks to embed:", len(new_texts))
+        if new_texts:
+            embs = model.encode(new_texts, show_progress_bar=True, convert_to_numpy=True)
+            # append to existing arrays/files
+            if EMB_FILE.exists():
+                existing = np.load(EMB_FILE)
+                combined = append_embeds(existing, embs)
+            else:
+                combined = embs
+            np.save(EMB_FILE, combined)
+            with EMB_IDS.open("a", encoding="utf-8") as idf:
+                for did in new_doc_ids:
+                    idf.write(json.dumps({"doc_id": did}) + "\n")
+            print("Saved embeddings:", EMB_FILE, "ids:", EMB_IDS)
+        else:
+            print("No new docs to embed.")
+    else:
+        print("Skipping embeddings (COMPUTE_EMBEDDINGS != 1)")
 
 if __name__ == "__main__":
-    build()
+    main()
