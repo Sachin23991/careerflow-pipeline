@@ -1,0 +1,24 @@
+# Core
+requests==2.31.0
+feedparser==6.0.12
+beautifulsoup4==4.12.2
+lxml==4.9.3
+readability-lxml==0.8.1
+tqdm==4.66.1
+python-dotenv==1.0.0
+
+# Embeddings (optional in CI: compute only on new docs)
+sentence-transformers==2.2.2
+numpy==1.26.0
+
+# Vector DB for local/in-proc retrieval (optional)
+chromadb==0.4.0
+
+# HF upload
+huggingface_hub==0.18.0
+
+# API server
+fastapi==0.100.0
+uvicorn==0.22.0
+
+# sqlite is built-in; if you need async sqlite consider aiosqlite
