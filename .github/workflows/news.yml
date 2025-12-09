@@ -1,111 +1,40 @@
-name: Update Global News RAG
+name: Hourly RAG Update
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Every hour
+    - cron: "15 * * * *"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
-concurrency:
-  group: rag-news-update
-  cancel-in-progress: true
-
 jobs:
-  pipeline:
+  update-rag:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
 
-    # -------------------------------
-    # 1. Checkout repository
-    # -------------------------------
-    - name: Checkout repo
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install sentence-transformers numpy tqdm feedparser
+          pip install beautifulsoup4 readability-lxml lxml
+          pip install huggingface_hub
 
-    # -------------------------------
-    # 2. Setup Python
-    # -------------------------------
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
+      - name: Run Pipeline (Scrape → Filter → Chunk → Embed)
+        env:
+          COMPUTE_EMBEDDINGS: "1"
+        run: |
+          python pipeline/scrape.py
+          python pipeline/filter.py
+          python pipeline/dataset_builder.py
 
-
-    # -------------------------------
-    # 3. Cache pip
-    # -------------------------------
-    - name: Cache pip
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
-
-    # -------------------------------
-    # 4. Install dependencies
-    # -------------------------------
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install -r requirements.txt
-
-
-    # ------------------------------------------------
-    # 5. Run Global News → RAG Pipeline
-    # ------------------------------------------------
-    - name: Run scraping + filtering + RAG building
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        HF_REPO: ${{ secrets.HF_REPO }}   # Must be: Sachin21112004/carrerflow-ai
-        COMPUTE_EMBEDDINGS: "1"           # Set "0" to skip embedding generation
-      run: |
-        set -euo pipefail
-
-        echo "🚀 Running Global News → RAG Pipeline..."
-
-        python pipeline/scrape.py
-        python pipeline/filter.py
-        python pipeline/dataset_builder.py
-
-        echo "📤 Uploading final RAG dataset to HuggingFace..."
-        python pipeline/push_to_hf.py
-
-
-    # -------------------------------
-    # 6. Show Git diff
-    # -------------------------------
-    - name: Show Git changes
-      run: |
-        echo "---------------- Git Status ----------------"
-        git status --porcelain || true
-
-        echo "---------------- Git Diff ----------------"
-        git --no-pager diff --stat || true
-
-
-    # ------------------------------------------------
-    # 7. Commit small metadata if changed
-    # ------------------------------------------------
-    - name: Commit RAG dataset summary if changed
-      run: |
-        set -euo pipefail
-
-        git config user.name "Sachin23991"
-        git config user.email "Sachinraosahab7@gmail.com"
-
-        # Only commit small files (avoid committing large embeddings)
-        git add pipeline/rag_docs.jsonl || true
-        
-        if git diff --staged --quiet; then
-          echo "✔ No changes to commit"
-        else
-          git commit -m "Auto RAG update [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || true
-          git push || true
-        fi
+      - name: Upload RAG to HuggingFace
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python pipeline/push_to_hf.py
