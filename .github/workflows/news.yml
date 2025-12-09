@@ -1,99 +1,71 @@
-name: Update Career Dataset
+name: Update Global News RAG
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Every hour
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: rag-news-update
+  cancel-in-progress: true
+
 jobs:
   pipeline:
     runs-on: ubuntu-latest
-
     steps:
-    # -------------------------------
-    # 1. Checkout repository
-    # -------------------------------
-    - name: Checkout repo
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    # -------------------------------
-    # 2. Setup Python
-    # -------------------------------
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    # -------------------------------
-    # 3. Install Dependencies
-    # -------------------------------
-    - name: Install dependencies
-      run: |
-        pip install --upgrade pip
-        pip install requests feedparser huggingface_hub transformers beautifulsoup4 lxml
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-    # -------------------------------
-    # 4. Scrape + Filter + Build 
-    # -------------------------------
-    - name: Run scraping + filtering + dataset builder
-      run: |
-        set -e
-        python pipeline/scrape.py
-        python pipeline/filter.py
-        python pipeline/dataset_builder.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-    # --------------------------------------------------------
-    # 5. Merge or Overwrite train.jsonl
-    # --------------------------------------------------------
-    - name: Merge or overwrite train.jsonl
-      run: |
-        set -e
-        HOUR_IN_IST=$(TZ='Asia/Kolkata' date +%H)
-        echo "🕒 Current IST Hour: $HOUR_IN_IST"
+      - name: Run pipeline (scrape -> filter -> build)
+        env:
+          COMPUTE_EMBEDDINGS: "1"   # set to "0" to skip embeddings
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO: ${{ secrets.HF_REPO }}
+        run: |
+          set -euo pipefail
+          python pipeline/scrape.py
+          python pipeline/filter.py
+          python pipeline/dataset_builder.py
+          python pipeline/indexer.py || echo "indexer failed (optional)"
+          python pipeline/push_to_hf.py
 
-        if [ "$HOUR_IN_IST" = "00" ]; then
-          echo "🌙 Midnight IST → Overwriting train.jsonl"
-          cp pipeline/train.jsonl train.jsonl
-        else
-          echo "⏳ Hourly run → Merging new items"
-          python pipeline/dataset_merge.py
-        fi
+      - name: Show git diff
+        run: |
+          git status --porcelain || true
+          git --no-pager diff --stat || true
 
-    # -------------------------------
-    # 6. Upload to HuggingFace
-    # -------------------------------
-    - name: Upload updated dataset to HuggingFace
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      run: |
-        set -e
-        python pipeline/push_to_hf.py
-
-    # --------------------------------------------------------
-    # 7. Debug - Show what changed
-    # --------------------------------------------------------
-    - name: Show Git changes
-      run: |
-        echo "---------------- Git Status ----------------"
-        git status --short || true
-
-        echo "---------------- Git Diff ----------------"
-        git diff --stat || true
-
-    # --------------------------------------------------------
-    # 8. Force Add → Commit → Push (RELIABLE)
-    # --------------------------------------------------------
-    - name: Commit and Push Changes
-      run: |
-        git config --local user.name "Sachin23991"
-        git config --local user.email "Sachinraosahab7@gmail.com"
-
-        git add -A
-        git commit --author="Sachin23991 <Sachinraosahab7@gmail.com>" -m "Auto update: Career data sync [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || echo "No changes to commit"
-        git push || echo "Nothing to push"
-
+      - name: Commit small manifest if changed
+        run: |
+          set -euo pipefail
+          git config user.name "Sachin23991"
+          git config user.email "Sachinraosahab7@gmail.com"
+          git add pipeline/rag_docs.jsonl || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto RAG update [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || true
+            git push || true
+          fi
