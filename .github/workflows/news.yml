@@ -2,7 +2,7 @@ name: Update Global News RAG
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 * * * *"   # Runs every hour
   workflow_dispatch:
 
 permissions:
@@ -15,57 +15,89 @@ concurrency:
 jobs:
   pipeline:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    # -------------------------------
+    # 1. Checkout repository
+    # -------------------------------
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+    # -------------------------------
+    # 2. Setup Python
+    # -------------------------------
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+    # -------------------------------
+    # 3. Cache pip dependencies
+    # -------------------------------
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+    # -------------------------------
+    # 4. Install dependencies
+    # -------------------------------
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements.txt
 
-      - name: Run pipeline (scrape -> filter -> build)
-        env:
-          COMPUTE_EMBEDDINGS: "1"   # set to "0" to skip embeddings
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_REPO: ${{ secrets.HF_REPO }}
-        run: |
-          set -euo pipefail
-          python pipeline/scrape.py
-          python pipeline/filter.py
-          python pipeline/dataset_builder.py
-          python pipeline/indexer.py || echo "indexer failed (optional)"
-          python pipeline/push_to_hf.py
+    # ---------------------------------------------
+    # 5. Run the full pipeline: scrape → filter → build → index → push
+    # ---------------------------------------------
+    - name: Run news → RAG pipeline
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        HF_REPO:  ${{ secrets.HF_REPO }}     # MUST BE "Sachin21112004/carrerflow-ai"
+        COMPUTE_EMBEDDINGS: "1"              # Set to "0" to disable embedding generation
+      run: |
+        set -euo pipefail
+        echo "🚀 Running Global News → RAG pipeline..."
 
-      - name: Show git diff
-        run: |
-          git status --porcelain || true
-          git --no-pager diff --stat || true
+        python pipeline/scrape.py
+        python pipeline/filter.py
+        python pipeline/dataset_builder.py
+        python pipeline/indexer.py || echo "ℹ️ Indexer optional: skipped."
 
-      - name: Commit small manifest if changed
-        run: |
-          set -euo pipefail
-          git config user.name "Sachin23991"
-          git config user.email "Sachinraosahab7@gmail.com"
-          git add pipeline/rag_docs.jsonl || true
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Auto RAG update [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || true
-            git push || true
-          fi
+        echo "📤 Uploading to HuggingFace..."
+        python pipeline/push_to_hf.py
+
+    # -------------------------------
+    # 6. Show changed files
+    # -------------------------------
+    - name: Show Git changes
+      run: |
+        echo "---------------- Git Status ----------------"
+        git status --porcelain || true
+
+        echo "---------------- Git Diff ----------------"
+        git --no-pager diff --stat || true
+
+    # ---------------------------------------------
+    # 7. Commit small metadata files if needed
+    # ---------------------------------------------
+    - name: Commit minimal pipeline metadata
+      run: |
+        set -euo pipefail
+        git config user.name "Sachin23991"
+        git config user.email "Sachinraosahab7@gmail.com"
+
+        # Commit only small files; skip embeddings and large dataset
+        git add pipeline/rag_docs.jsonl 2>/dev/null || true
+
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Auto RAG update [IST Hour: $(TZ='Asia/Kolkata' date +%H)]" || true
+          git push || true
+        fi
