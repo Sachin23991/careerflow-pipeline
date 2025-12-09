@@ -1,47 +1,53 @@
 # pipeline/filter.py
 import json
 from pathlib import Path
+import sqlite3
 
 RAW = Path("pipeline/raw_news.jsonl")
 OUT = Path("pipeline/filtered_news.jsonl")
+DB = Path("pipeline/seen.db")
+MIN_CHARS = 300
 
-MIN_CHARS = 300   # keep items with at least this many characters in text
-
-def is_ok(item):
-    if not item.get("url") or not item.get("text"):
-        return False
-    txt = item["text"].strip()
-    if len(txt) < MIN_CHARS:
-        return False
-    if "example.com" in item.get("url",""):
-        return False
-    return True
+def ensure_db():
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS seen(id TEXT PRIMARY KEY, url TEXT, added_at TEXT)")
+    conn.commit()
+    return conn
 
 def main():
-    seen_ids = set()
-    out = OUT.open("w", encoding="utf-8")
-    if not RAW.exists():
-        print("No raw file found:", RAW)
-        return
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    conn = ensure_db()
+    c = conn.cursor()
 
-    total = 0
     kept = 0
-    for line in open(RAW, encoding="utf-8"):
-        total += 1
-        try:
-            item = json.loads(line)
-        except Exception:
-            continue
-        if item.get("id") in seen_ids:
-            continue
-        if not is_ok(item):
-            continue
-        seen_ids.add(item.get("id"))
-        out.write(json.dumps(item, ensure_ascii=False) + "\n")
-        kept += 1
-
-    out.close()
-    print(f"Filtered: kept {kept}/{total}. Saved to {OUT}")
-
+    total = 0
+    with OUT.open("w", encoding="utf-8") as outf:
+        if not RAW.exists():
+            print("No raw file:", RAW)
+            return
+        for line in RAW.open(encoding="utf-8"):
+            total += 1
+            try:
+                it = json.loads(line)
+            except:
+                continue
+            id_ = it.get("id")
+            if not id_:
+                continue
+            # skip previously seen
+            c.execute("SELECT 1 FROM seen WHERE id = ?", (id_,))
+            if c.fetchone():
+                continue
+            text = (it.get("text") or "").strip()
+            if len(text) < MIN_CHARS:
+                continue
+            # keep
+            outf.write(json.dumps(it, ensure_ascii=False) + "\n")
+            c.execute("INSERT INTO seen(id,url,added_at) VALUES (?, ?, datetime('now'))", (id_, it.get("url")))
+            kept += 1
+    conn.commit()
+    conn.close()
+    print(f"Filtered: kept {kept} of {total}")
 if __name__ == "__main__":
     main()
