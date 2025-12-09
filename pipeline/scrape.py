@@ -1,134 +1,125 @@
+# pipeline/scrape.py
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-import time
+from readability import Document
 import json
-import hashlib
+import time
+from hashlib import sha256
+from datetime import datetime
 
-OUTPUT_FILE = "pipeline/raw_news.jsonl"
+OUT = "pipeline/raw_news.jsonl"
 
-# -------------------------------------------------------
-#  ALL CAREER NEWS SOURCES
-# -------------------------------------------------------
-urls = [
-
-    # -------------------- Education / Exams --------------------
-    "https://timesofindia.indiatimes.com/education/rssfeedss.cms",
-    "https://www.hindustantimes.com/education/rssfeed",
-    "https://indianexpress.com/section/education/feed/",
-    "https://www.ndtv.com/education/rss",
-    "https://www.jagranjosh.com/rss/latest-news.xml",
-    "https://www.jagranjosh.com/rss/exams.xml",
-    "https://www.jagranjosh.com/rss/jobs.xml",
-    "https://www.freejobalert.com/feed/",
-
-    # -------------------- Government Job Updates --------------------
-    "https://www.sarkariresult.com/feed/",
-    "https://www.employmentnews.gov.in/RSS.aspx",
-    "https://www.upsc.gov.in/whats-new/all/rss",
-    "https://pscnotes.in/feed/",
-
-    # -------------------- Tech / IT / Industry Trends --------------------
-    "https://techcrunch.com/feed/",
-    "https://www.theverge.com/rss/index.xml",
-    "https://www.wired.com/feed/rss",
-    "https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms",
-    "https://gadgets360.com/rss/news",
-
-    # -------------------- Business / Economy --------------------
-    "https://economictimes.indiatimes.com/news/economy/rssfeeds/1715249553.cms",
-    "https://www.moneycontrol.com/rss/latestnews.xml",
-    "https://www.livemint.com/rss/news",
-
-    # -------------------- Skills / Courses / Certifications --------------------
-    "https://www.coursera.org/learn/feed",
-    "https://www.udemy.com/courses/feed/",
-    "https://www.edx.org/rss",
-    "https://www.futurelearn.com/info/blog/feed",
-
-    # -------------------- Startups & Entrepreneurship --------------------
-    "https://yourstory.com/feed",
-    "https://inc42.com/feed/",
-    "https://www.startupindia.gov.in/content/sih/en/rss.html",
-
-    # -------------------- International Careers --------------------
-    "https://www.studyabroad.com/rss",
-    "https://www.scholarshipsads.com/feed/",
-    "https://www.opportunitydesk.org/feed/",
+# Curated list of trusted RSS feeds (global, multi-field)
+FEEDS = [
+    "http://feeds.reuters.com/reuters/topNews",
+    "http://feeds.reuters.com/reuters/businessNews",
+    "http://feeds.reuters.com/Reuters/worldNews",
+    "https://www.bbc.co.uk/feeds/rss/news/rss.xml",
+    "http://feeds.bbci.co.uk/news/world/rss.xml",
+    "https://www.theguardian.com/world/rss",
+    "https://www.theguardian.com/business/rss",
+    "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+    "https://www.aljazeera.com/xml/rss/all.xml",
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://www.economist.com/latest/rss.xml",
+    "https://www.ft.com/?format=rss",
+    "https://www.washingtonpost.com/rss/",
+    "https://timesofindia.indiatimes.com/rssfeeds/-2128936835.cms",
+    "https://www.thehindu.com/news/national/feeder/default.rss",
+    "https://www.hindustantimes.com/feeds/rss/homepage/rssfeed.xml",
+    # Add more trusted feeds here
 ]
 
+USER_AGENT = "CareerFlowNewsBot/1.0 (+https://example.com)"
 
-# -------------------------------------------------------
-# Helper: extract text from article link (when possible)
-# -------------------------------------------------------
-def fetch_full_text(url):
-    """Attempts to extract full article text; falls back to summary."""
+def fetch_url(url, timeout=15):
+    headers = {"User-Agent": USER_AGENT}
+    r = requests.get(url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return r.text
+
+def extract_full_text(url, html):
     try:
-        html = requests.get(url, timeout=6).text
-        soup = BeautifulSoup(html, "html.parser")
+        doc = Document(html)
+        content_html = doc.summary()
+        soup = BeautifulSoup(content_html, "lxml")
+        text = soup.get_text(separator="\n").strip()
+        return text
+    except Exception:
+        # fallback: parse body text with soup
+        soup = BeautifulSoup(html, "lxml")
+        body = soup.body
+        if body:
+            return body.get_text(separator="\n").strip()
+        return ""
 
-        # Remove junk
-        for tag in soup(["script", "style", "header", "footer"]):
-            tag.extract()
+def normalize_item(entry, feed_url):
+    url = entry.get("link") or entry.get("id") or ""
+    title = entry.get("title", "").strip()
+    published = entry.get("published") or entry.get("updated") or ""
+    summary = entry.get("summary", "") or entry.get("description", "")
+    return {
+        "id": sha256((url + title).encode("utf-8")).hexdigest(),
+        "url": url,
+        "title": title,
+        "published": published,
+        "summary": BeautifulSoup(summary, "lxml").get_text().strip(),
+        "feed": feed_url,
+        "scraped_at": datetime.utcnow().isoformat() + "Z"
+    }
 
-        text = " ".join(t.get_text(" ", strip=True) for t in soup.find_all("p"))
-        return text[:2000]  # limit size
-    except:
-        return None
-
-
-# -------------------------------------------------------
-# SCRAPE ALL RSS FEEDS
-# -------------------------------------------------------
-def scrape_all():
-    print("🔍 Scraping latest career news...")
-
-    seen = set()
-    all_items = []
-
-    for url in urls:
-        print(f"⏳ Fetching from {url}")
-
+def main():
+    out = open(OUT, "w", encoding="utf-8")
+    seen_urls = set()
+    for feed in FEEDS:
         try:
-            feed = feedparser.parse(url)
+            d = feedparser.parse(feed)
         except Exception as e:
-            print(f"❌ Failed: {url} ({e})")
+            print("Feed parse error:", feed, e)
             continue
 
-        for entry in feed.entries:
-            title = entry.get("title", "").strip()
-            link = entry.get("link", "")
-            summary = entry.get("summary", "").strip()
+        for entry in d.entries:
+            try:
+                item = normalize_item(entry, feed)
+                if not item["url"]:
+                    continue
+                if item["url"] in seen_urls:
+                    continue
+                seen_urls.add(item["url"])
 
-            if not title or not link:
-                continue
+                # fetch article HTML and extract full text
+                try:
+                    html = fetch_url(item["url"])
+                    full_text = extract_full_text(item["url"], html)
+                except Exception as e:
+                    print("Failed to fetch/extract:", item["url"], e)
+                    full_text = item.get("summary", "")
 
-            # Unique ID to avoid duplicates
-            uid = hashlib.md5(link.encode()).hexdigest()
-            if uid in seen:
-                continue
-            seen.add(uid)
+                # ensure minimum length
+                if not full_text or len(full_text) < 200:
+                    # fallback to summary (some feeds only have summary)
+                    full_text = item.get("summary", "")
 
-            # Fetch full text if possible
-            full_text = fetch_full_text(link) or summary
+                # Compose raw payload
+                payload = {
+                    "id": item["id"],
+                    "url": item["url"],
+                    "title": item["title"],
+                    "published": item["published"],
+                    "feed": item["feed"],
+                    "scraped_at": item["scraped_at"],
+                    "text": full_text
+                }
 
-            item = {
-                "id": uid,
-                "title": title,
-                "summary": summary,
-                "content": full_text,
-                "url": link,
-                "timestamp": time.time(),
-            }
-            all_items.append(item)
+                out.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            except Exception as e:
+                print("Entry skip error:", e)
+        # polite pause
+        time.sleep(1)
 
-    # Save
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        for it in all_items:
-            f.write(json.dumps(it, ensure_ascii=False) + "\n")
-
-    print(f"✅ Scraping complete. Saved {len(all_items)} raw articles.")
-
+    out.close()
+    print("Saved raw items to", OUT)
 
 if __name__ == "__main__":
-    scrape_all()
+    main()
