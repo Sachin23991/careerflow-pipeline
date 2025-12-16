@@ -2,38 +2,27 @@
 
 import os
 import sys
-import json
-import numpy as np
-import faiss
 from huggingface_hub import HfApi, list_repo_files
 
-# ----------------------------------------------------
-# CONFIG
-# ----------------------------------------------------
 HF_TOKEN = os.getenv("HF_TOKEN")
+
+# Hardcoded repo ID (NO SECRET NEEDED)
 HF_REPO = "Sachin21112004/carrerflow-ai"
 REPO_TYPE = "dataset"
-
-EMB_PATH = "pipeline/embeddings.npy"
-IDS_PATH = "pipeline/emb_ids.jsonl"
 
 if not HF_TOKEN:
     print("❌ ERROR: HF_TOKEN is missing")
     sys.exit(1)
 
-if not os.path.exists(EMB_PATH) or not os.path.exists(IDS_PATH):
-    print("❌ ERROR: embeddings or ids file missing")
-    sys.exit(1)
-
 api = HfApi()
 
 # ----------------------------------------------------
-# STEP 1 — Compute repo size (best-effort)
+# STEP 1 — Compute existing repo size
 # ----------------------------------------------------
 def get_repo_size(repo_id):
     try:
-        total = 0
         files = list_repo_files(repo_id, repo_type=REPO_TYPE, token=HF_TOKEN)
+        total = 0
         for f in files:
             try:
                 info = api.repo_file_info(
@@ -47,65 +36,48 @@ def get_repo_size(repo_id):
             except:
                 pass
         return total
-    except:
+    except Exception as e:
+        print("⚠ Could not get repo size:", e)
         return 0
 
-repo_size_mb = get_repo_size(HF_REPO) / (1024 * 1024)
+
+repo_size = get_repo_size(HF_REPO)
+repo_size_mb = repo_size / (1024 * 1024)
 print(f"📦 HF Repo current size: {repo_size_mb:.2f} MB")
 
 # ----------------------------------------------------
-# STEP 2 — Decide destination folder
+# STEP 2 — Decide upload folder (auto-versioning)
 # ----------------------------------------------------
 if repo_size_mb >= 90:
     files = list_repo_files(HF_REPO, repo_type=REPO_TYPE, token=HF_TOKEN)
+
     versions = []
     for f in files:
         if f.startswith("rag_storage_v"):
             try:
-                versions.append(int(f.split("/")[0].replace("rag_storage_v", "")))
+                v = int(f.split("/")[0].replace("rag_storage_v", ""))
+                versions.append(v)
             except:
                 pass
+
     next_ver = max(versions) + 1 if versions else 2
     DEST = f"rag_storage_v{next_ver}"
-    print(f"🔄 Using new version folder: {DEST}/")
+    print(f"🔄 Repo >100MB → Creating new version folder: {DEST}/")
+
 else:
     DEST = "rag_storage"
-    print(f"👍 Using folder: {DEST}/")
+    print(f"👍 Repo <100MB → Using folder: {DEST}/")
 
 # ----------------------------------------------------
-# STEP 3 — Build FAISS index
+# STEP 3 — Files to upload
 # ----------------------------------------------------
-print("🔧 Building FAISS index...")
+FILES = {
+    "pipeline/rag_docs.jsonl": f"{DEST}/rag_docs.jsonl",
+    "pipeline/embeddings.npy": f"{DEST}/embeddings.npy",
+    "pipeline/emb_ids.jsonl": f"{DEST}/emb_ids.jsonl",
+}
 
-embeddings = np.load(EMB_PATH).astype("float32")
-dim = embeddings.shape[1]
-
-index = faiss.IndexFlatL2(dim)
-index.add(embeddings)
-
-os.makedirs("pipeline/faiss_out", exist_ok=True)
-FAISS_INDEX = "pipeline/faiss_out/index.faiss"
-faiss.write_index(index, FAISS_INDEX)
-
-print(f"✅ FAISS index built ({index.ntotal} vectors)")
-
-# ----------------------------------------------------
-# STEP 4 — Build metadata.json
-# ----------------------------------------------------
-metadata = []
-with open(IDS_PATH, "r") as f:
-    for line in f:
-        metadata.append(json.loads(line))
-
-META_PATH = "pipeline/faiss_out/metadata.json"
-with open(META_PATH, "w") as f:
-    json.dump(metadata, f, ensure_ascii=False)
-
-print("✅ Metadata file written")
-
-# ----------------------------------------------------
-# STEP 5 — Ensure repo exists
-# ----------------------------------------------------
+# Ensure repo exists
 api.create_repo(
     repo_id=HF_REPO,
     repo_type=REPO_TYPE,
@@ -114,22 +86,24 @@ api.create_repo(
 )
 
 # ----------------------------------------------------
-# STEP 6 — Upload ONLY production files
+# STEP 4 — Upload files
 # ----------------------------------------------------
-UPLOADS = {
-    FAISS_INDEX: f"{DEST}/index.faiss",
-    META_PATH: f"{DEST}/metadata.json",
-}
+for local, remote in FILES.items():
+    if not os.path.exists(local):
+        print(f"⏭ Skipping missing file: {local}")
+        continue
 
-for local, remote in UPLOADS.items():
     print(f"⬆ Uploading {local} → {remote}")
-    api.upload_file(
-        path_or_fileobj=local,
-        path_in_repo=remote,
-        repo_id=HF_REPO,
-        repo_type=REPO_TYPE,
-        token=HF_TOKEN
-    )
-    print(f"✅ Uploaded: {remote}")
+    try:
+        api.upload_file(
+            path_or_fileobj=local,
+            path_in_repo=remote,
+            repo_id=HF_REPO,
+            repo_type=REPO_TYPE,
+            token=HF_TOKEN
+        )
+        print(f"✅ Uploaded: {remote}")
+    except Exception as e:
+        print(f"❌ Upload failed for {local}: {e}")
 
-print("🎉 RAG index update complete.")
+print("🎉 Upload complete.")
